@@ -14,7 +14,37 @@
  * the License.
  */
 
-async function createWebAssembly(path, importObject) {
-  const bytes = await window.fetch(path).then((response) => response.arrayBuffer());
-  return await WebAssembly.instantiate(bytes, importObject);
+async function create(bytes, callbacks) {
+  const memory = new WebAssembly.Memory({initial: 256, maximum: 256});
+
+  const importObject = (function() {
+    const env = {
+      'abortStackOverflow': () => { throw new Error('abortStackOverflow'); },
+      'table': new WebAssembly.Table({initial: 0, maximum: 0, element: 'anyfunc'}),
+      'tableBase': 0,
+      'memory': memory,
+      'memoryBase': 1024,
+      'STACKTOP': 0,
+      'STACK_MAX': memory.buffer.byteLength,
+      'DYNAMICTOP_PTR': 0,
+    };
+    for (const key in callbacks) {
+      env['_' + key] = callbacks[key];
+    }
+    return {env};
+  }());
+
+  const buffer = new Int8Array(memory.buffer);
+  return {wa: await WebAssembly.instantiate(bytes, importObject), buffer};
+}
+
+/**
+ * Converts buffer to string. Only supports UTF-8.
+ *
+ * @param {!TypedArray} buffer
+ * @return {string}
+ */
+function bufferToString(buffer) {
+  const uint8 = new Uint8Array(buffer);
+  return String.fromCodePoint(...uint8);
 }
