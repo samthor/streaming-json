@@ -18,7 +18,11 @@ specific language governing permissions and limitations under the License.
 <script src="utils.js"></script>
 <script>
 
-async function start({wa, buffer}) {
+function timeout(duration=0) {
+  return new Promise((resolve) => window.setTimeout(resolve, duration));
+}
+
+async function start({wa, buffer}, url, logger) {
   const exports = wa.instance.exports;
 
   const maxSize = 1024 * 1024 * 4;  // FIXME: constant max size
@@ -27,31 +31,55 @@ async function start({wa, buffer}) {
 
   exports._streaming_init(startOfAlloc);
 
-  const out = await window.fetch('test.json')
-  const reader = await out.body.getReader();
+  const pending = [];
+  const processed = [];
 
-  // TODO: do .read() as fast as possible, punt wasm work elsewhere?
-
-  console.time('parse');
-  for (;;) {
-    const part = await reader.read();
+  function work() {
+    const part = pending.shift();
+    processed.push(part);  // just store for logging
     if (part.done) {
-      break;
+      const status = exports._streaming_next(0);
+      console.info('ended tokens, status', status);
+      return false;
     }
 
+    // TODO: send smaller amounts
     buffer.set(part.value, memoryLocation);
     memoryLocation += part.value.length;
 
-    // TODO: basically only call this from a setTimeout
     const len = memoryLocation - startOfAlloc;
     const out = exports._streaming_next(len);
     if (out <= 0) {
-      console.info('error run tokens', out, 'length', len);
+      console.warn('error run tokens', out, 'length', len);
     }
+
+    return pending.length;
   }
 
-  const status = exports._streaming_next(0);
-  console.info('ended tokens, status', status);
+  const idle = (function(inner) {
+    let id = 0;
+    const fn = () => {
+      id = 0;
+      if (inner()) {
+        update();
+      }
+    };
+    function update() {
+      id = id || window.setTimeout(fn, 0);
+    }
+    return update;
+  }(work));
+
+  console.time('parse');
+  const out = await window.fetch(url)
+  const reader = await out.body.getReader();
+  for (;;) {
+    const part = await reader.read();
+    pending.push(part);
+    idle();
+    if (part.done) { break; }
+  }
+  console.warn('whole file fetched', processed.length, 'parts done', pending.length, 'remaining');
   console.timeEnd('parse');
 }
 
@@ -59,17 +87,49 @@ window.addEventListener('load', (ev) => {
   const f = window.fetch('runner.wasm').then((response) => response.arrayBuffer());
 
   document.getElementById('run').addEventListener('click', async (ev) => {
+    const url = path.value;
+    const log = document.createElement('pre');
+    document.body.appendChild(log);
+    const heading = document.createElement('strong');
+    heading.textContent = `${url}, ${new Date}`;
+    log.appendChild(heading);
+
+    const prev = {};
+    const writer = (id, value) => {
+      let el = prev[id];
+      if (!el) {
+        el = prev[id] = document.createElement('div');
+        log.appendChild(el);
+      }
+      el.textContent = value;
+    };
+
+    let tokens = 0;
+
     const bytes = await f;
     const data = await create(bytes, {
       depth_callback(from, to, depth) {
-        console.info('depth', depth);
+        if (depth === 2) {
+          const bytes = buffer.slice(startOfAlloc + from, startOfAlloc + to);
+          const s = bufferToString(bytes);
+          const o = JSON.parse(s);
+
+          console.info(o.category, o.name);
+        }
       },
       token_callback(from, to) {
-        
+        ++tokens;
+        writer('tokens', `${tokens} tokens`);
       },
     });
 
-    await start(data);
+    var buffer = data.buffer;  // ugly hoist
+    // FIXME FIXME FIXME copied from above function
+    var maxSize = 1024 * 1024 * 4;  // FIXME: constant max size
+    var startOfAlloc = buffer.length - maxSize;
+
+
+    await start(data, url, writer);
   });
 });
 
@@ -78,6 +138,5 @@ window.addEventListener('load', (ev) => {
 <body>
   <input type="text" id="path" value="/test.json" />
   <button id="run">Run</button>
-  <pre id="log"></pre>
 </body>
 </html>
