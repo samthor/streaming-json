@@ -1,0 +1,114 @@
+<!--
+Copyright 2017 Google Inc. All rights reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+-->
+<!DOCTYPE html>
+<html>
+<head>
+<script src="utils.js"></script>
+<script>
+
+function bufferToString(buffer) {
+  const uint8 = new Uint8Array(buffer);
+  return String.fromCodePoint(...uint8);
+}
+
+async function start() {
+  const memory = new WebAssembly.Memory({initial: 256, maximum: 256});
+  const memoryBuffer = new Int8Array(memory.buffer);
+
+  const maxSize = 1024 * 1024 * 4;  // FIXME: constant max size
+  const startOfAlloc = memoryBuffer.length - maxSize;
+  let memoryLocation = startOfAlloc;
+
+  const importObject = (function() {
+    const env = {
+      'abortStackOverflow': () => { throw new Error('abortStackOverflow'); },
+      'table': new WebAssembly.Table({initial: 0, maximum: 0, element: 'anyfunc'}),
+      'tableBase': 0,
+      'memory': memory,
+      'memoryBase': 1024,
+      'STACKTOP': 0,
+      'STACK_MAX': memoryBuffer.byteLength,
+      'DYNAMICTOP_PTR': 0,
+      '_emscripten_asm_const_v': function() {
+        // FIXME: This is the generated method for EM_ASM code.
+        throw 'asm const called';
+      },
+      '_depth_callback': function(from, to, depth) {
+        if (depth < 0) {
+          console.info(at, len, 'negative blah');
+          return;
+        }
+        const buffer = memoryBuffer.slice(startOfAlloc + from, startOfAlloc + to);
+        if (depth == 2) {
+          const o = JSON.parse(bufferToString(buffer));
+          console.info(o);
+//          console.debug('depth', depth, buffer.length);
+        }
+      },
+      '_token_callback': function(from, to) {
+        const buffer = memoryBuffer.slice(startOfAlloc + from, startOfAlloc + to);
+//        console.debug(bufferToString(buffer));
+      },
+    };
+    return {env};
+  }());
+
+  const wa = await createWebAssembly('runner.wasm', importObject);
+  const exports = wa.instance.exports;
+
+  exports._streaming_init(startOfAlloc);
+
+  const out = await window.fetch('test.json')
+  const reader = await out.body.getReader();
+
+  console.time('parse');
+  for (;;) {
+    const part = await reader.read();
+    if (part.done) {
+      break;
+    }
+
+    memoryBuffer.set(part.value, memoryLocation);
+    memoryLocation += part.value.length;
+
+    const len = memoryLocation - startOfAlloc;
+    const out = exports._streaming_next(len);
+    if (out <= 0) {
+      console.info('error run tokens', out, 'length', len);
+    }
+  }
+
+  const status = exports._streaming_next(0);
+  console.info('ended tokens, status', status);
+  console.timeEnd('parse');
+
+  const out2 = await window.fetch('test.json');
+  console.time('blob');
+  const blob = await out2.blob();
+  console.timeEnd('blob');
+
+  const out3 = await window.fetch('test.json');
+  console.time('json');
+  const data = await out3.json();
+  console.timeEnd('json');
+}
+
+start().catch((err) => {
+  throw err;
+});
+
+</script>
+</body>
+</html>
