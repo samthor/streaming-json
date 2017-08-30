@@ -40,6 +40,7 @@ async function start({wa, buffer}, url, logger) {
     if (part.done) {
       const status = exports._streaming_next(0);
       console.info('ended tokens, status', status);
+      console.timeEnd('streaming');
       return false;
     }
 
@@ -70,7 +71,8 @@ async function start({wa, buffer}, url, logger) {
     return update;
   }(work));
 
-  console.time('parse');
+  console.time('streaming');
+  console.time('fetch');
   const out = await window.fetch(url)
   const reader = await out.body.getReader();
   for (;;) {
@@ -80,7 +82,7 @@ async function start({wa, buffer}, url, logger) {
     if (part.done) { break; }
   }
   console.warn('whole file fetched', processed.length, 'parts done', pending.length, 'remaining');
-  console.timeEnd('parse');
+  console.timeEnd('fetch');
 }
 
 window.addEventListener('load', (ev) => {
@@ -114,7 +116,8 @@ window.addEventListener('load', (ev) => {
           const s = bufferToString(bytes);
           const o = JSON.parse(s);
 
-          console.info(o.category, o.name);
+          // just do something boring with the depth==2 JSON
+          console.debug(o.category, o.name);
         }
       },
       token_callback(from, to) {
