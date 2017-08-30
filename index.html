@@ -84,7 +84,7 @@ async function start({wa, buffer}, url, logger) {
 }
 
 window.addEventListener('load', (ev) => {
-  const f = window.fetch('runner.wasm').then((response) => response.arrayBuffer());
+  const f = window.fetch('dist/runner.wasm').then((response) => response.arrayBuffer());
 
   document.getElementById('run').addEventListener('click', async (ev) => {
     const url = path.value;
